@@ -1,7 +1,7 @@
 // gasApi.js  — drop-in replacement for google.script.run
 // ─────────────────────────────────────────────────────────────────────────────
 // REPLACE THIS URL with your actual deployed Web App URL from Step 2:
-const GAS_API_URL = "https://script.google.com/macros/s/AKfycbxNJmC1vnoC05jTgURrj6iWydAcmtyKMj_sWow9Euioonc-bDrbgSDxemGuDFKt-yY9/exec";
+const GAS_API_URL = "https://script.google.com/macros/s/AKfycbzUmepfvfHulf5LdZlhMhtNLWye1cu1i-1LAuRrHfG_EaIpeTByp8k7UdLl9kzSY8BT/exec";
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function gasCall(action, params = {}) {
