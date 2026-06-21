@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="ku">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Evaluation Portal</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & ReactDOM (Using cdnjs to prevent Google Apps Script CORS blocking) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <!-- Babel for JSX -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+  <!-- SheetJS for Excel Download -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@300;400;600;700&display=swap');
+    body {
+      font-family: 'Noto Sans Arabic', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <div id="root"></div>
+  <div id="debug" style="color:red;padding:20px;font-size:16px;font-weight:bold;"></div>
+
+  
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    function App() {
+      const [lang, setLang] = useState('ku');
+      const [view, setView] = useState('login'); // 'login', 'teacher', 'admin', 'subject_teacher'
+      const [user, setUser] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [students, setStudents] = useState([]);
+      const [selectedStudent, setSelectedStudent] = useState(null);
+      const [selectedPosition, setSelectedPosition] = useState('');
+      const [teachersList, setTeachersList] = useState([]);
+      
+      const [adminStats, setAdminStats] = useState({ 
+        totalEvaluated: 0, pending: 0, totalStudents: 0, 
+        completedNames: [], pendingNames: [], totalNames: [], evaluationsList: [] 
+      });
+      const [activeNamesList, setActiveNamesList] = useState(null);
+      const [searchTerm, setSearchTerm] = useState('');
+
+      const [subjectStudents, setSubjectStudents] = useState([]);
+
+      const [formState, setFormState] = useState({
+        grade: '',
+        scores: {}
+      });
+
+      // Signature Pad refs and states
+      const canvasRef = useRef(null);
+      const [isDrawing, setIsDrawing] = useState(false);
+      const [hasDrawn, setHasDrawn] = useState(false);
+
+      // --- NEW API CONFIGURATION ---
+      const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyhKe_Ccg8qZYGkfNodQcmXyRDxRDxJXmos7vAxImiiVpDIBPadxf3yK3lEDxKm8URy/exec";
+
+      const apiCall = async (action, payload = {}) => {
+        try {
+          const response = await fetch(GAS_WEB_APP_URL, {
+            method: 'POST',
+            body: JSON.stringify({ action, payload })
+          });
+          return await response.json();
+        } catch (error) {
+          console.error("API Error:", error);
+          throw error;
+        }
+      };
+      // -----------------------------
+
+      const t = {
+        ku: {
+          title: 'ڕێڕەوی هەڵسەنگاندنی مەشق - زانکۆی ڕاپەڕین',
+          login: 'چوونەژوورەوەی ئەلیکترۆنی',
+          teacherCode: 'کۆدی تایبەتی سەرپەرشتیار بنووسە',
+          invalidCode: 'کۆدەکە هەڵەیە، تکایە دووبارە تاقیبکەرەوە یان پەیوەندی بە سەرۆکی بەشەوە بکە.',
+          welcome: 'بەخێربێیت م.',
+          logout: 'دەرچوون',
+          position: 'ڕۆڵی خۆت دیاری بکە',
+          superScience: 'سەرپەرشتیاری زانستی (Science)',
+          superEdu: 'سەرپەرشتیاری پەروەردەیی (Education)',
+          selectStudent: 'ناوی خوێندکاری ڕاهێنراو هەڵبژێرە',
+          grade: 'پۆلی خوێندنگا (Grade) *',
+          gradesList: ['یەکەم', 'دووەم', 'سێیەم', 'چوارەم', 'پێنجەم', 'شەشەم', 'حەوتەم', 'هەشتەم', 'نۆیەم'],
+          subjectLabel: 'ناوى ئه‌و بابه‌ته‌ى ده‌يڵێته‌وه‌',
+          subjectValue: 'زمانی ئینگلیزی (English Language)',
+          studentNameLabel: 'ناوى خوێندكارى ڕاهێنراو',
+          departmentLabel: 'بەش',
+          schoolNameLabel: 'ناوى خوێندنگا',
+          dateLabel: 'بەروارى سه‌رلێدان',
+          totalNum: 'کۆ بە ژمارە',
+          totalWord: 'کۆ بە نوسینی کوردی',
+          totalAll: 'کۆی گشتی نمرە',
+          signatureLabel: 'تکایە لێرە واژۆ بکە بە دەست (Digital Signature)',
+          clearSignature: 'سڕینەوەی واژۆ (Clear)',
+          submit: 'ناردن و دروستکردنی فایلی فەرمی',
+          adminStats: 'پەنێڵی بەڕێوەبەری سەرەکى',
+          sendEmails: 'ناردنی بیرهێنانەوە بۆ هەموو مامۆستایان',
+          successMsg: 'هەڵسەنگاندنەکە تۆمارکرا، پەڕگەکان دروستکران و بۆ ئیمەیڵ نێردران!',
+          noStudents: 'تەواوی خوێندکارانت بۆ ئەم ڕۆڵە هەڵسەنگاندووە یان هیچ خوێندکارێک لەگەڵ ناوت پەیوەست نەکراوە.',
+          searchPlaceholder: 'بۆ خوێندکار بگەڕێ...',
+          teachersReminderTitle: 'ناردنی بیرهێنانەوە بۆ مامۆستایان',
+          sendReminderSingle: 'ناردنی بیرهێنانەوە',
+          completedTitle: 'هەڵسەنگاندنی کراوە',
+          pendingTitle: 'هێشتا ماوە',
+          totalTitle: 'تەواوی خوێندکاران'
+        },
+        en: {
+          title: 'Training Evaluation Portal - UOR',
+          login: 'Electronic Portal Login',
+          teacherCode: 'Enter Supervisor Code',
+          invalidCode: 'Invalid code, please try again.',
+          welcome: 'Welcome Mr/Mrs.',
+          logout: 'Logout',
+          position: 'Select Supervisor Role',
+          superScience: 'Superintendent of Science',
+          superEdu: 'Superintendent of Education',
+          selectStudent: 'Select Trainee Student',
+          grade: 'School Grade *',
+          gradesList: ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth'],
+          subjectLabel: 'Subject Taught',
+          subjectValue: 'English Language',
+          studentNameLabel: 'Trainee Student Name',
+          departmentLabel: 'Department',
+          schoolNameLabel: 'School Name',
+          dateLabel: 'Visit Date',
+          totalNum: 'Total in Number',
+          totalWord: 'Total in Kurdish Words',
+          totalAll: 'Overall Score',
+          signatureLabel: 'Please draw your signature here',
+          clearSignature: 'Clear Signature',
+          submit: 'Submit & Generate Official Files',
+          adminStats: 'Admin Control Center',
+          sendEmails: 'Send Email Reminders to All Teachers',
+          successMsg: 'Evaluation recorded, official documents created and sent to email successfully!',
+          noStudents: 'All assigned students evaluated.',
+          searchPlaceholder: 'Search student name...',
+          teachersReminderTitle: 'Send Reminders to Instructors',
+          sendReminderSingle: 'Send Reminder',
+          completedTitle: 'Evaluated Students',
+          pendingTitle: 'Pending Students',
+          totalTitle: 'Total Students'
+        }
+      };
+
+      const currentT = t[lang];
+      const isRtl = lang === 'ku';
+
+      const eduQuestions = [
+        "هاوسەنگی کەسێتی و کارلێکى ئەرێنی لە نێوان ڕاهێنراو و خوێندکاردا.",
+        "پێشکەشکردنى زانیارى و ناوه‌ڕۆكی بابەته‌كه‌ بە شێوەیەکى رێک و پێک و پەیوەست بەیەکەوە.",
+        "ئامادەکردن و بەکارهێنانى هۆکارەکانى فێرکردن بۆ بەدیهێنانى ئامانجه‌كانی وانە.",
+        "توانای هەڵبژاردنى پرسیارى گونجاو بۆ وروژاندنى خوێندکاران.",
+        "هەڵبژاردنى ڕێگا و شێوازى وانەوتنەوەى گونجاو بۆ بابه‌ته‌كه‌ی.",
+        "تواناى به‌رێوه‌بردن و کۆنترۆلکردنى پۆل.",
+        "توانای جێ بەجێ کردنى (فیدباك) بۆ بابەت.",
+        "توانای سادەکردن و گەیاندن و بەستنەوەى بابەت بە ژینگەی خوێندکار.",
+        "روخساری گشتی و رێکپۆشی راهێنراو.",
+        "بەکارهێنانى پاداشت و سزاى گونجاو.",
+        "ئامادەکردنى دەفتەرى پلانی رۆژانە.",
+        "رادەی جێ بەجێ کردنى پلانی رۆژانە."
+      ];
+
+      const sciQuestions = [
+        "دروستی و وردى بابەتى زانستی.",
+        "توانای ڕوونکردنەوەى چەمک و زاراوە زانستیەکان.",
+        "فراوان كردنی بابەتى زانستی و دەولەمەندکردنى بە نموونە.",
+        "توانای شیکردنەوەى زانستییانه‌ی بابەت.",
+        "تواناى ئه‌نجامدانی جێبەجێکردنى کرداریی بۆ بابەته‌كه‌.",
+        "تواناى پوختەکردنى چەمک و زاراوەی په‌یوه‌ست به‌ وانە.",
+        "توانای لە خۆگرتنى سه‌رجه‌م بابەتى زانستی وانەکە."
+      ];
+
+      const questions = selectedPosition === 'education' ? eduQuestions : (selectedPosition === 'science' ? sciQuestions : []);
+      const maxScore = selectedPosition === 'education' ? 3 : 5;
+
+      useEffect(() => {
+        if (canvasRef.current && view === 'teacher' && selectedStudent) {
+          const canvas = canvasRef.current;
+          const ctx = canvas.getContext('2d');
+          ctx.lineWidth = 3;
+          ctx.lineCap = 'round';
+          ctx.strokeStyle = '#0000FF';
+
+          const preventScroll = (e) => e.preventDefault();
+          canvas.addEventListener('touchstart', preventScroll, { passive: false });
+          canvas.addEventListener('touchmove', preventScroll, { passive: false });
+
+          return () => {
+            canvas.removeEventListener('touchstart', preventScroll);
+            canvas.removeEventListener('touchmove', preventScroll);
+          };
+        }
+      }, [view, selectedStudent]);
+
+      const getPointerPos = (e) => {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        let clientX = e.clientX;
+        let clientY = e.clientY;
+
+        if (e.touches && e.touches.length > 0) {
+          clientX = e.touches[0].clientX;
+          clientY = e.touches[0].clientY;
+        }
+
+        return {
+          x: clientX - rect.left,
+          y: clientY - rect.top
+        };
+      };
+
+      const startDrawing = (e) => {
+        setIsDrawing(true);
+        const { x, y } = getPointerPos(e);
+        const ctx = canvasRef.current.getContext('2d');
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+      };
+
+      const draw = (e) => {
+        if (!isDrawing) return;
+        const { x, y } = getPointerPos(e);
+        const ctx = canvasRef.current.getContext('2d');
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        setHasDrawn(true);
+      };
+
+      const stopDrawing = () => {
+        setIsDrawing(false);
+      };
+
+      const clearSignature = () => {
+        if (canvasRef.current) {
+          const canvas = canvasRef.current;
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          setHasDrawn(false);
+        }
+      };
+
+      const numberToKurdishWords = (num) => {
+        if (lang === 'en') return num.toString();
+        const ones = ["", "یەک", "دوو", "سێ", "چوار", "پێنج", "شەش", "حەوت", "هەشت", "نۆ"];
+        const tens = ["", "دە", "بیست", "سی", "چل", "پەنجا", "شەست", "حەفتا", "هەشتا", "نەوەد"];
+        if (num === 0) return "سفر";
+        if (num === 10) return "دە";
+        let word = "";
+        if (num >= 10 && num < 20) {
+          const teens = { 11: "یازدە", 12: "دوازدە", 13: "سێزدە", 14: "چواردە", 15: "پازدە", 16: "شازدە", 17: "حەڤدە", 18: "هەژدە", 19: "نۆزدە" };
+          return teens[num];
+        }
+        if (num >= 20) {
+          let t = Math.floor(num / 10);
+          let o = num % 10;
+          word = tens[t];
+          if (o > 0) word += " و " + ones[o];
+        } else {
+          word = ones[num];
+        }
+        return word;
+      };
+
+      const totalScore = Object.values(formState.scores).reduce((acc, curr) => acc + Number(curr || 0), 0);
+
+      const handleLogin = (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        const code = e.target.elements.code.value;
+
+        apiCall('loginTeacher', { code })
+          .then((res) => {
+            setLoading(false);
+            if (res.success) {
+              setUser(res);
+              setView(res.role);
+              if (res.role === 'teacher') fetchStudents(res.name);
+              else if (res.role === 'admin') { fetchAdminStats(); fetchTeachers(); }
+              else if (res.role === 'subject_teacher') { fetchSubjectStudents(); }
+            } else setError(currentT.invalidCode);
+          })
+          .catch(() => { setLoading(false); setError("هەڵەیەک ڕوویدا لە کاتی پەیوەستبوون بە سێرڤەر."); });
+      };
+
+      const fetchStudents = (tName) => {
+        setLoading(true);
+        apiCall('getStudentsForTeacher', { teacherName: tName })
+          .then((list) => { setStudents(list || []); setLoading(false); });
+      };
+
+      const fetchAdminStats = () => {
+        setLoading(true);
+        apiCall('getAdminStats')
+          .then((stats) => { if (stats) setAdminStats(stats); setLoading(false); });
+      };
+
+      const fetchTeachers = () => {
+        apiCall('getTeachersList')
+          .then((list) => { setTeachersList(list || []); });
+      };
+
+      const fetchSubjectStudents = () => {
+        setLoading(true);
+        apiCall('getSubjectTeacherStudents')
+          .then((list) => { setSubjectStudents(list || []); setLoading(false); });
+      };
+
+      const handleSubmit = () => {
+        if (!selectedStudent || !formState.grade || !hasDrawn) {
+          alert(lang === 'ku' ? "تکایە پێش ناردن واژۆ بکە!" : "Please provide your signature before submitting!");
+          return;
+        }
+        setLoading(true);
+
+        let signatureBase64 = null;
+        if (hasDrawn && canvasRef.current) {
+          signatureBase64 = canvasRef.current.toDataURL('image/png');
+        }
+
+        const data = {
+          teacherName: user.name,
+          studentName: selectedStudent.name,
+          position: selectedPosition,
+          totalScore: totalScore,
+          totalWord: numberToKurdishWords(totalScore),
+          signatureBase64: signatureBase64, 
+          details: {
+            grade: formState.grade,
+            school: selectedStudent.school,
+            questions: questions,
+            scores: formState.scores
+          }
+        };
+
+        apiCall('submitEvaluation', { formData: data })
+          .then((res) => {
+              setLoading(false);
+              if (res.success) {
+                alert(currentT.successMsg);
+                fetchStudents(user.name);
+                setSelectedStudent(null);
+                setFormState({ grade: '', scores: {} });
+                clearSignature();
+              } else {
+                alert("کێشەیەک لە تۆمارکردنەکە هەیە: " + res.error);
+              }
+          })
+          .catch((err) => {
+              setLoading(false);
+              alert("پەیوەستبوون سەرکەوتوو نەبوو: " + err);
+          });
+      };
+
+      const handleSaveAllSubjectScores = () => {
+        for (let st of subjectStudents) {
+           if (st.score !== '' && (Number(st.score) < 0 || Number(st.score) > 20)) {
+               alert("نمرەی هەڵە هەیە، تکایە دڵنیابەرەوە لە نمرەکان (0-20) / Invalid score detected");
+               return;
+           }
+        }
+        setLoading(true);
+        apiCall('submitAllSubjectScores', { studentsArray: subjectStudents })
+          .then((res) => {
+            setLoading(false);
+            alert(res.message);
+          });
+      };
+
+      const handleSendReminderSingle = (teacherName) => {
+        setLoading(true);
+        apiCall('sendIndividualReminder', { teacherName })
+          .then((res) => { setLoading(false); alert(res.message); });
+      };
+
+      const handleExportExcel = () => {
+        const data = filteredEvaluations.map(item => {
+          const total = (Number(item.eduScore) || 0) + (Number(item.sciScore) || 0) + (Number(item.subTeacherScore) || 0) + (Number(item.principalScore) || 0);
+          return {
+            'ناوی سیانی': item.studentName,
+            'نمرەی ه. پەروەردەیی (35%)': item.eduScore,
+            'نمرەی ه. زانستی (35%)': item.sciScore,
+            'مامۆستای وانە (20%)': item.subTeacherScore,
+            'بەڕێوەبەری خوێندنگا (10%)': item.principalScore,
+            'نمرەی کۆتایی (100)': total
+          };
+        });
+        const ws = XLSX.utils.json_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Evaluations");
+        XLSX.writeFile(wb, "Student_Evaluations.xlsx");
+      };
+
+      const handleExportWord = () => {
+        const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Export HTML to Word</title><style>table{border-collapse:collapse;width:100%;}th,td{border:1px solid black;padding:8px;text-align:right;}</style></head><body dir='rtl' style='font-family: Arial, sans-serif;'>";
+        const footer = "</body></html>";
+        let tableHtml = "<h2>ڕاپۆرتی نمرەکانی هەڵسەنگاندنی مەشق</h2><table><thead><tr><th>ناوی سیانی</th><th>نمرەی ه. پەروەردەیی (35%)</th><th>نمرەی ه. زانستی (35%)</th><th>مامۆستای وانە (20%)</th><th>بەڕێوەبەری خوێندنگا (10%)</th><th>نمرەی کۆتایی (100)</th></tr></thead><tbody>";
+
+        filteredEvaluations.forEach(item => {
+          const total = (Number(item.eduScore) || 0) + (Number(item.sciScore) || 0) + (Number(item.subTeacherScore) || 0) + (Number(item.principalScore) || 0);
+          tableHtml += `<tr><td>${item.studentName}</td><td>${item.eduScore}</td><td>${item.sciScore}</td><td>${item.subTeacherScore}</td><td>${item.principalScore}</td><td style="font-weight:bold;">${total}</td></tr>`;
+        });
+        tableHtml += "</tbody></table>";
+
+        const sourceHTML = header + tableHtml + footer;
+        const source = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(sourceHTML);
+        const fileDownload = document.createElement("a");
+        document.body.appendChild(fileDownload);
+        fileDownload.href = source;
+        fileDownload.download = 'Student_Evaluations.doc';
+        fileDownload.click();
+        document.body.removeChild(fileDownload);
+      };
+
+      const filteredEvaluations = (adminStats.evaluationsList || []).filter(item => 
+        item && item.studentName && item.studentName.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+
+      return (
+        <div className={`min-h-screen ${isRtl ? 'rtl' : 'ltr'}`} dir={isRtl ? 'rtl' : 'ltr'}>
+          <header className="bg-white shadow-sm border-b p-4 flex justify-between items-center sticky top-0 z-10">
+            <h1 className="text-lg md:text-xl font-bold text-indigo-700 flex items-center gap-2">
+              🎓 {currentT.title}
+            </h1>
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setLang(lang === 'ku' ? 'en' : 'ku')}
+                className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-md text-sm font-medium transition"
+              >
+                {lang === 'ku' ? 'English' : 'کوردی'}
+              </button>
+              {user && (
+                <button onClick={() => {setUser(null); setView('login');}} className="text-red-600 hover:bg-red-50 px-3 py-1 rounded-md transition font-semibold text-sm">
+                  {currentT.logout}
+                </button>
+              )}
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto p-4 md:p-6 mt-6">
+
+            {view === 'login' && (
+              <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md mx-auto border border-indigo-50">
+                <div className="text-center mb-6">
+                  <div className="text-4xl mb-2">🎓</div>
+                  <h2 className="text-2xl font-bold text-slate-800">{currentT.login}</h2>
+                  <p className="text-xs text-slate-400 mt-1">University of Raparin - English Dept</p>
+                </div>
+                {error && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-xl mb-4 border border-red-100">{error}</div>}
+                <form onSubmit={handleLogin} className="space-y-5">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">{currentT.teacherCode}</label>
+                    <input name="code" type="password" required className="w-full border border-slate-300 rounded-xl p-3 outline-none focus:ring-2 focus:ring-indigo-500 text-center tracking-widest text-lg font-bold" placeholder="••••••••" />
+                  </div>
+                  <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3.5 rounded-xl transition shadow-lg shadow-indigo-100">
+                    {loading ? 'چاوەڕوانبە / Please wait...' : currentT.login}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {view === 'subject_teacher' && (
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 max-w-4xl mx-auto">
+                <h2 className="text-2xl font-bold text-slate-800 mb-6 text-center">تۆمارکردنی نمرەی مامۆستای بابەت (Subject Teacher)</h2>
+                {loading && <div className="text-center py-6 text-indigo-600 font-semibold">باردەکرێت / Loading...</div>}
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                   <table className="w-full text-right border-collapse">
+                      <thead>
+                         <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase border-b border-slate-200">
+                            <th className="p-4">ناوی خوێندکار</th>
+                            <th className="p-4">قوتابخانە</th>
+                            <th className="p-4 text-center w-48">نمرە (بۆ 20)</th>
+                         </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-sm">
+                         {subjectStudents.map((st, idx) => (
+                            <tr key={idx} className="hover:bg-slate-50/50 transition">
+                               <td className="p-4 font-bold text-slate-800">{st.name}</td>
+                               <td className="p-4 text-slate-600">{st.school}</td>
+                               <td className="p-4">
+                                  <input
+                                     type="number" min="0" max="20"
+                                     value={st.score}
+                                     onChange={(e) => {
+                                        let v = e.target.value;
+                                        if (v !== '' && Number(v) > 20) v = '20';
+                                        if (v !== '' && Number(v) < 0) v = '0';
+                                        const newStudents = [...subjectStudents];
+                                        newStudents[idx].score = v;
+                                        setSubjectStudents(newStudents);
+                                     }}
+                                     className="w-full border border-slate-300 rounded-lg p-2 text-center font-bold text-indigo-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                                     placeholder="0-20"
+                                  />
+                               </td>
+                            </tr>
+                         ))}
+                      </tbody>
+                   </table>
+                </div>
+                <div className="mt-6 flex justify-end">
+                   <button
+                     onClick={handleSaveAllSubjectScores}
+                     disabled={loading}
+                     className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold transition shadow-lg w-full md:w-auto"
+                   >
+                     پاشەکەوتکردنی هەموویان (Save All)
+                   </button>
+                </div>
+              </div>
+            )}
+
+            {view === 'teacher' && (
+              <div className="space-y-6">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center">
+                  <div>
+                    <span className="text-xs text-slate-400 uppercase tracking-wider mb-1">{currentT.welcome}</span>
+                    <h2 className="text-2xl font-bold text-slate-800">{user.name}</h2>
+                  </div>
+                  <span className="bg-indigo-100 text-indigo-800 font-semibold text-xs px-3 py-1.5 rounded-full">سەرپەرشتیار / Supervisor</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">{currentT.position}</label>
+                    <select className="w-full border rounded-xl p-3 bg-slate-50 border-slate-300 outline-none focus:ring-2 focus:ring-indigo-500" value={selectedPosition} onChange={(e) => { setSelectedPosition(e.target.value); setSelectedStudent(null); }}>
+                      <option value="">-- هەڵبژێرە --</option>
+                      <option value="education">{currentT.superEdu}</option>
+                      <option value="science">{currentT.superScience}</option>
+                    </select>
+                  </div>
+
+                  {selectedPosition && (
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">{currentT.selectStudent}</label>
+                      <select className="w-full border rounded-xl p-3 bg-slate-50 border-slate-300 outline-none focus:ring-2 focus:ring-indigo-500" value={selectedStudent ? selectedStudent.name : ''} onChange={(e) => { const st = (students || []).find(s => s.name === e.target.value); setSelectedStudent(st); }}>
+                        <option value="">-- هەڵبژێرە --</option>
+                        {(students || []).filter(s => (selectedPosition === 'science' ? s.isScience : s.isEducation)).map((s, idx) => (
+                          <option key={idx} value={s.name}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {loading && <div className="text-center py-6 text-indigo-600 font-semibold">باردەکرێت / Loading...</div>}
+
+                {selectedPosition && !loading && (students || []).filter(s => (selectedPosition === 'science' ? s.isScience : s.isEducation)).length === 0 && (
+                  <div className="text-center p-12 bg-emerald-50 text-emerald-800 rounded-2xl border border-emerald-100">
+                    <div className="text-4xl mb-2">🎉</div>
+                    <p className="font-semibold">{currentT.noStudents}</p>
+                  </div>
+                )}
+
+                {selectedStudent && (
+                  <div className="bg-white p-6 md:p-8 rounded-3xl shadow-xl border border-indigo-50">
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-4 mb-8 bg-slate-50 p-6 rounded-2xl border border-slate-200 text-sm">
+                      <div><span className="text-slate-400 block text-xs mb-1">{currentT.studentNameLabel}</span> <p className="font-bold text-slate-800">{selectedStudent.name}</p></div>
+                      <div><span className="text-slate-400 block text-xs mb-1">{currentT.schoolNameLabel}</span> <p className="font-bold text-slate-800">{selectedStudent.school}</p></div>
+                      <div><span className="text-slate-400 block text-xs mb-1">{currentT.subjectLabel}</span> <p className="font-bold text-slate-800">{currentT.subjectValue}</p></div>
+                      <div><span className="text-slate-400 block text-xs mb-1">{currentT.departmentLabel}</span> <p className="font-bold text-indigo-700">{currentT.subjectValue}</p></div>
+                      <div><span className="text-slate-400 block text-xs mb-1">{currentT.dateLabel}</span> <p className="font-bold text-slate-800">{new Date().toLocaleDateString('en-GB')}</p></div>
+                      <div className="flex flex-col">
+                        <span className="text-slate-400 block text-xs mb-1 font-semibold text-indigo-700">{currentT.grade}</span> 
+                        <select className="border border-indigo-200 rounded-xl p-2 bg-white font-bold text-indigo-800 outline-none focus:ring-2 focus:ring-indigo-500" value={formState.grade} onChange={e => setFormState({...formState, grade: e.target.value})}>
+                          <option value="">-- هەڵبژێرە --</option>
+                          {currentT.gradesList.map(g => <option key={g} value={g}>{g}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto mb-8 border border-slate-200 rounded-2xl">
+                      <table className="w-full text-right border-collapse">
+                        <thead>
+                          <tr className="bg-indigo-50 text-indigo-900 text-xs font-bold uppercase">
+                            <th className="p-4 border-b border-slate-200">پێوه‌رى هه‌ڵسه‌نگاندن / Evaluation Criteria</th>
+                            <th className="p-4 border-b border-slate-200 text-center w-36">نمرە (بۆ {maxScore})</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {questions.map((q, idx) => (
+                            <tr key={idx} className="hover:bg-indigo-50/40 transition">
+                              <td className="p-4 text-sm text-slate-700 leading-relaxed">{q}</td>
+                              <td className="p-4 text-center">
+                                <select className="w-full p-2.5 border border-slate-300 rounded-xl bg-white text-center font-bold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500" value={formState.scores[idx] || ''} onChange={(e) => setFormState({ ...formState, scores: { ...formState.scores, [idx]: e.target.value }})}>
+                                  <option value="">-</option>
+                                  {Array.from({length: maxScore}, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
+                                </select>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row justify-between items-center gap-6 border-t border-slate-100 pt-6">
+                      <div className="bg-indigo-900 text-white rounded-2xl p-5 flex gap-6 items-center w-full md:w-auto shadow-xl shadow-indigo-100">
+                        <div className="text-center pl-6 border-l border-indigo-700">
+                          <p className="text-indigo-300 text-xs mb-1">Total</p>
+                          <p className="text-4xl font-extrabold">{totalScore}</p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-indigo-200">{currentT.totalNum}: <strong className="text-white text-base">{totalScore}</strong></p>
+                          <p className="text-sm text-indigo-200 mt-1">{currentT.totalWord}: <strong className="text-white text-base">{numberToKurdishWords(totalScore)}</strong></p>
+                        </div>
+                      </div>
+
+                      <div className="text-center bg-slate-50 border border-slate-200 p-4 rounded-xl flex-grow max-w-sm">
+                        <p className="text-xs text-slate-500 mb-2 font-bold">{currentT.signatureLabel}</p>
+                        <canvas
+                          ref={canvasRef}
+                          width={300}
+                          height={120}
+                          onMouseDown={startDrawing}
+                          onMouseMove={draw}
+                          onMouseUp={stopDrawing}
+                          onMouseLeave={stopDrawing}
+                          onTouchStart={startDrawing}
+                          onTouchMove={draw}
+                          onTouchEnd={stopDrawing}
+                          className="mx-auto border border-indigo-200 rounded-lg bg-white cursor-crosshair touch-none"
+                        />
+                        <button 
+                          type="button" 
+                          onClick={clearSignature} 
+                          className="mt-3 text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1 rounded-md font-semibold transition"
+                        >
+                          {currentT.clearSignature}
+                        </button>
+                      </div>
+                      
+                      <button 
+                        onClick={handleSubmit}
+                        disabled={loading || !formState.grade || !hasDrawn}
+                        className={`w-full md:w-auto px-8 py-5 rounded-2xl font-bold transition shadow-lg text-center ${(!formState.grade || !hasDrawn || loading) ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none' : 'bg-green-500 hover:bg-green-600 text-white shadow-green-100'}`}
+                      >
+                        {loading ? 'چاوەڕوانبە...' : (!hasDrawn ? (lang === 'ku' ? 'پێویستە واژۆ بکەیت' : 'Signature Required') : currentT.submit)}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {view === 'admin' && (
+              <div className="space-y-8">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-2xl font-bold text-slate-800">{currentT.adminStats}</h2>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div onClick={() => setActiveNamesList('completed')} className={`bg-white p-6 rounded-2xl shadow-sm border cursor-pointer hover:border-indigo-400 transition ${activeNamesList === 'completed' ? 'ring-2 ring-indigo-500 border-indigo-500' : 'border-slate-100'}`}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wider mb-1 font-bold">{currentT.completedTitle}</p>
+                        <p className="text-3xl font-extrabold text-indigo-700">{adminStats.totalEvaluated}</p>
+                      </div>
+                      <div className="text-3xl">✅</div>
+                    </div>
+                  </div>
+                  
+                  <div onClick={() => setActiveNamesList('pending')} className={`bg-white p-6 rounded-2xl shadow-sm border cursor-pointer hover:border-amber-400 transition ${activeNamesList === 'pending' ? 'ring-2 ring-amber-500 border-amber-500' : 'border-slate-100'}`}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wider mb-1 font-bold">{currentT.pendingTitle}</p>
+                        <p className="text-3xl font-extrabold text-amber-600">{adminStats.pending}</p>
+                      </div>
+                      <div className="text-3xl">⏳</div>
+                    </div>
+                  </div>
+
+                  <div onClick={() => setActiveNamesList('total')} className={`bg-white p-6 rounded-2xl shadow-sm border cursor-pointer hover:border-slate-400 transition ${activeNamesList === 'total' ? 'ring-2 ring-slate-500 border-slate-500' : 'border-slate-100'}`}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wider mb-1 font-bold">{currentT.totalTitle}</p>
+                        <p className="text-3xl font-extrabold text-slate-800">{adminStats.totalStudents}</p>
+                      </div>
+                      <div className="text-3xl">👥</div>
+                    </div>
+                  </div>
+                </div>
+
+                {activeNamesList && (
+                  <div className="bg-indigo-50/50 rounded-2xl border border-indigo-100 p-6 transition">
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="text-sm font-bold text-indigo-900 uppercase">
+                        {activeNamesList === 'completed' && `${currentT.completedTitle} (${(adminStats.completedNames || []).length})`}
+                        {activeNamesList === 'pending' && `${currentT.pendingTitle} (${(adminStats.pendingNames || []).length})`}
+                        {activeNamesList === 'total' && `${currentT.totalTitle} (${(adminStats.totalNames || []).length})`}
+                      </h4>
+                      <button onClick={() => setActiveNamesList(null)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">
+                        [ داخستن / Close ]
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                      {(activeNamesList === 'completed' ? adminStats.completedNames : activeNamesList === 'pending' ? adminStats.pendingNames : adminStats.totalNames || []).map((name, index) => (
+                        <div key={index} className="bg-white p-3 rounded-xl border border-slate-100 text-xs font-semibold text-slate-700 shadow-sm flex items-center gap-2">
+                          <span className="text-slate-300">#{index+1}</span><span>{name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                  <div className="flex justify-between items-center border-b pb-4 mb-4">
+                    <h3 className="text-lg font-bold text-slate-800">{currentT.teachersReminderTitle}</h3>
+                    <button 
+                      onClick={() => { setLoading(true); apiCall('emailTeachersReminder').then(res => { setLoading(false); alert(res.message); }); }}
+                      disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold text-xs transition"
+                    >
+                      {currentT.sendEmails}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    {(teachersList || []).map((tName, idx) => (
+                      <div key={idx} className="p-3 bg-slate-50 border rounded-xl flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-700">{tName}</span>
+                        <button onClick={() => handleSendReminderSingle(tName)} className="text-[10px] bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1.5 rounded-lg font-bold transition">
+                          {currentT.sendReminderSingle}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                  <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-6">
+                    <h3 className="text-lg font-bold text-slate-800">تۆمارکەر و نمرەکان</h3>
+                    <div className="flex flex-wrap gap-2 items-center w-full md:w-auto">
+                        <button onClick={handleExportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition flex-1 md:flex-none text-center">
+                            Excel داگرتنی
+                        </button>
+                        <button onClick={handleExportWord} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition flex-1 md:flex-none text-center">
+                            Word داگرتنی
+                        </button>
+                        <input type="text" placeholder={currentT.searchPlaceholder} className="w-full md:w-64 border border-slate-300 rounded-xl p-2.5 outline-none focus:ring-2 focus:ring-indigo-500 text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                    </div>
+                  </div>
+
+                  {loading ? (
+                    <div className="text-center py-12 text-slate-400 font-medium">کۆکردنەوەی زانیارییەکان... / Loading Data...</div>
+                  ) : filteredEvaluations.length === 0 ? (
+                    <div className="text-center py-12 text-slate-400 font-medium">هیچ ئەنجامێک نەدۆزرایەوە / No evaluations found</div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200">
+                      <table className="w-full text-right border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase border-b border-slate-200">
+                            <th className="p-4">ناوی سیانی</th>
+                            <th className="p-4 text-center">نمرەی ه. پەروەردەیی 35%</th>
+                            <th className="p-4 text-center">نمرەی ه. زانستی 35%</th>
+                            <th className="p-4 text-center">مامۆستای وانە 20%</th>
+                            <th className="p-4 text-center">بەڕێوەبەری خوێندنگا 10%</th>
+                            <th className="p-4 text-center text-indigo-700">نمرەی کۆتایی 100</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-sm">
+                          {filteredEvaluations.map((item, idx) => {
+                            const total = (Number(item.eduScore) || 0) + (Number(item.sciScore) || 0) + (Number(item.subTeacherScore) || 0) + (Number(item.principalScore) || 0);
+                            return (
+                              <tr key={idx} className="hover:bg-slate-50/50 transition">
+                                <td className="p-4 font-bold text-slate-800">{item.studentName}</td>
+                                <td className="p-4 text-center text-indigo-700 font-extrabold">{item.eduScore}</td>
+                                <td className="p-4 text-center text-emerald-700 font-extrabold">{item.sciScore}</td>
+                                <td className="p-4 text-center text-amber-700 font-extrabold">{item.subTeacherScore}</td>
+                                <td className="p-4 text-center text-purple-700 font-extrabold">{item.principalScore}</td>
+                                <td className="p-4 text-center text-slate-900 font-black text-base">{total}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    const rootElement = document.getElementById('root');
+    if (rootElement) {
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(<App />);
+    }
+  </script>
+</body>
+</html>
